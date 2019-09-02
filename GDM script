@@ -1,0 +1,233 @@
+##################################################
+### Modelling adpative genetic variation using GDM
+##################################################
+
+
+$ ~/R-3.5.2/bin/R
+
+library(gdm)
+da<-read.table("GDM_input_east_edit.txt",header=T)
+gdm.1<-gdm(da,geo=F)
+gdm.1$coefficients
+
+pdf("plot_panel_gdm_geoF_east.pdf")
+plot(gdm.1,plot.layout=c(3,3))
+dev.off()
+
+save(gdm.1,file="gdm.1.data")
+
+
+######################################
+### Transform GDM only for east range
+######################################
+
+library(raster)
+
+r<-getData("worldclim",var="bio",res=2.5)
+r1_coords<- read.table("/data/not_backup/mengmeng/need_to_sort/adapt_prediction/climate_dataset/GDM/work_folder/model2/transform_2/r1_coord",header=T)
+
+coords<-data.frame(r1_coords[,"x"],r1_coords[,"y"])
+
+names(coords)<-c("x","y")
+
+points<-SpatialPoints(coords,proj4string=r@crs)
+
+values <- extract(r,points)
+
+df_ori<- cbind.data.frame(coordinates(points),values)
+
+df_ori_east<-subset(df_ori,x>-92)  ##### Only plot for the east of the Mississippi River
+
+df<- data.frame(df_ori_east$x,df_ori_east$y,df_ori_east$bio2/10,df_ori_east$bio4/10,df_ori_east$bio5/10,df_ori_east$bio8/10,df_ori_east$bio9/10,df_ori_east$bio13,df_ori_east$bio17)
+
+names(df)[1:9]<-c("Long","Lat","BIO2","BIO4","BIO5","BIO8","BIO9","BIO13","BIO17")
+
+library(gdm)
+
+load("~/gdm.1.data")
+Trans_gdm <-gdm.transform(gdm.1,na.omit(df[,3:9]))
+
+PCs<-prcomp(Trans_gdm[,c(1:7)]) 
+a1 <- PCs$x[, 1]
+a2 <- PCs$x[, 2]
+a3 <- PCs$x[, 3]
+
+red<- a1 + a2
+green<- -a2
+blue<- a3 + a2 - a1
+
+scalR <- (red-min(red))/(max(red)-min(red))*255
+scalG <- (green-min(green))/(max(green)-min(green))*255
+scalB <- (blue-min(blue))/(max(blue)-min(blue))*255
+
+rast2_red_df <- cbind ( na.omit(df)[,c("Long","Lat")],data.frame(scalR))
+rast2_green_df<- cbind ( na.omit(df)[,c("Long","Lat")],data.frame(scalG))
+rast2_blue_df<- cbind ( na.omit(df)[,c("Long","Lat")],data.frame(scalB))
+
+write.table(rast2_red_df,"rast2_red_df")
+write.table(rast2_green_df,"rast2_green_df")
+write.table(rast2_blue_df,"rast2_blue_df")
+
+
+####################
+### Plot GDM-biplot
+####################
+
+vec<-c("BIO2","BIO4","BIO8","BIO9","BIO17")
+lv <- length(vec)
+
+vind <- rownames(PCs$rotation) %in% vec
+
+xrng <- range(PCs$x[, 1], PCs$rotation[, 1]/2.3)*1.5
+yrng <- range(PCs$x[, 2], PCs$rotation[, 2]/2.3)*1.5
+
+pdf("GDM_east_biplot.pdf")
+plot((PCs$x[, 1:2]), xlim = xrng, ylim = yrng,pch = ".", cex = 2, col = rgb(scalR, scalG, scalB, max = 255),asp = 1,cex.lab=1.2, cex.axis=1.2)
+arrows(rep(0, lv), rep(0, lv), PCs$rotation[vec,1]/1.7,PCs$rotation[vec, 2]/1.7,length =0.0625,lwd=1.6)
+arrows(c(-0.3,0),c(0,-0.2),c(0.3,0),c(0,0.32), angle=15,lwd=1.9)
+text(x=c(0.34,0),y=c(0,0.34),label=c("PC1","PC2"),font=2,cex=1.2)
+text(-0.16,0.3,label="BIO8",cex=1.2,font=2)
+text(0.58,0.17,label="BIO4",cex=1.2,font=2)
+text(-0.06,-0.08,label="BIO17",cex=1.2,font=2)
+text(0.01,-0.32,label="BIO2",cex=1.2,font=2)
+text(0.09,-0.42,label="BIO9",cex=1.2,font=2)
+dev.off()
+ 
+library(rgdal)
+library(raster)
+
+rast_red_df<-read.table("rast2_red_df",header=T)
+rast_green_df<-read.table("rast2_green_df",header=T)
+rast_blue_df<-read.table("rast2_blue_df",header=T)
+
+rast_red<-rasterFromXYZ(rast_red_df)  #### Transform dataframe to raster
+rast_green<-rasterFromXYZ(rast_green_df)
+rast_blue<-rasterFromXYZ(rast_blue_df)
+
+r2_OutRast<-stack (rast_red,rast_green,rast_blue) ##### Stack different colours
+
+crs(r2_OutRast) <- "+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0" ### Assign coordination system to raster
+r2_OutRast
+plotRGB(r2_OutRast) #### Save it as .png  
+
+
+##########################
+### Plot GDM-predicted map
+##########################
+
+library(gdm)
+load("/data/not_backup/mengmeng/need_to_sort/adapt_prediction/pita_revise/gdm/gdm.1.data")
+
+##### Below da1~da8 are the bioclimatic variables that I downloaded from worldclim.com. These data represent eight scenariosfor RCP2.6, RCP4.5, RCP6.0 and RCP8.5 around years 2050 and 2070.
+
+
+da1<-read.table("cur_proj1_edit_head.da",header=T)
+da2<-read.table("cur_proj2_edit_head.da",header=T)
+da3<-read.table("cur_proj3_edit_head.da",header=T)
+da4<-read.table("cur_proj4_edit_head.da",header=T)
+da5<-read.table("cur_proj5_edit_head.da",header=T)
+da6<-read.table("cur_proj6_edit_head.da",header=T)
+da7<-read.table("cur_proj7_edit_head.da",header=T)
+da8<-read.table("cur_proj8_edit_head.da",header=T)
+
+##### Predict the adaptive genetic variation using GDM under each of the eight scenarios.
+
+da1_pred<-predict.gdm(gdm.1,na.omit(da1))
+da2_pred<-predict.gdm(gdm.1,na.omit(da2))
+da3_pred<-predict.gdm(gdm.1,na.omit(da3))
+da4_pred<-predict.gdm(gdm.1,na.omit(da4))
+da5_pred<-predict.gdm(gdm.1,na.omit(da5))
+da6_pred<-predict.gdm(gdm.1,na.omit(da6))
+da7_pred<-predict.gdm(gdm.1,na.omit(da7))
+da8_pred<-predict.gdm(gdm.1,na.omit(da8))
+
+
+da1_pred_edit<-cbind(na.omit(da1)[,c(3:4)],data.frame(da1_pred))
+da2_pred_edit<-cbind(na.omit(da2)[,c(3:4)],data.frame(da2_pred))
+da3_pred_edit<-cbind(na.omit(da3)[,c(3:4)],data.frame(da3_pred))
+da4_pred_edit<-cbind(na.omit(da4)[,c(3:4)],data.frame(da4_pred))
+da5_pred_edit<-cbind(na.omit(da5)[,c(3:4)],data.frame(da5_pred))
+da6_pred_edit<-cbind(na.omit(da6)[,c(3:4)],data.frame(da6_pred))
+da7_pred_edit<-cbind(na.omit(da7)[,c(3:4)],data.frame(da7_pred))
+da8_pred_edit<-cbind(na.omit(da8)[,c(3:4)],data.frame(da8_pred))
+
+
+###Plot the current and projected future distance maps 
+
+library(raster)
+library(RColorBrewer)
+library(rworldmap)
+
+rast_proj1_df<-read.table("da1_pred_edit",header=T)
+rast_proj2_df<-read.table("da2_pred_edit",header=T)
+rast_proj3_df<-read.table("da3_pred_edit",header=T)
+rast_proj4_df<-read.table("da4_pred_edit",header=T)
+rast_proj5_df<-read.table("da5_pred_edit",header=T)
+rast_proj6_df<-read.table("da6_pred_edit",header=T)
+rast_proj7_df<-read.table("da7_pred_edit",header=T)
+rast_proj8_df<-read.table("da8_pred_edit",header=T)
+
+
+rast_proj1<-rasterFromXYZ(rast_proj1_df)
+rast_proj2<-rasterFromXYZ(rast_proj2_df)
+rast_proj3<-rasterFromXYZ(rast_proj3_df)
+rast_proj4<-rasterFromXYZ(rast_proj4_df)
+rast_proj5<-rasterFromXYZ(rast_proj5_df)
+rast_proj6<-rasterFromXYZ(rast_proj6_df)
+rast_proj7<-rasterFromXYZ(rast_proj7_df)
+rast_proj8<-rasterFromXYZ(rast_proj8_df)
+
+breakpoints<-c(0.45,0.47,0.49,0.51,0.53,0.55,0.57,0.59,0.61)
+
+pdf("proj1.pdf")
+plot(rast_proj1,col=brewer.pal(9,"YlOrBr"),legend=FALSE, breaks=breakpoints)
+bm<-getMap(resolution="low")
+plot(bm,lwd=0.8,add=T,border="gray30")
+dev.off()
+
+pdf("proj2.pdf")
+plot(rast_proj2,col=brewer.pal(9,"YlOrBr"),legend=FALSE, breaks=breakpoints)
+bm<-getMap(resolution="low")
+plot(bm,lwd=0.8,add=T,border="gray30")
+dev.off()
+
+pdf("proj3.pdf")
+plot(rast_proj3,col=brewer.pal(9,"YlOrBr"),legend=FALSE, breaks=breakpoints)
+bm<-getMap(resolution="low")
+plot(bm,lwd=0.8,add=T,border="gray30")
+dev.off()
+		  
+pdf("proj4.pdf")
+plot(rast_proj4,col=brewer.pal(9,"YlOrBr"),legend=FALSE, breaks=breakpoints)
+bm<-getMap(resolution="low")
+plot(bm,lwd=0.8,add=T,border="gray30")
+dev.off()
+
+pdf("proj5.pdf")
+plot(rast_proj5,col=brewer.pal(9,"YlOrBr"),legend=FALSE, breaks=breakpoints)
+bm<-getMap(resolution="low")
+plot(bm,lwd=0.8,add=T,border="gray30")
+dev.off()
+
+pdf("proj6.pdf")
+plot(rast_proj6,col=brewer.pal(9,"YlOrBr"),legend=FALSE, breaks=breakpoints)
+bm<-getMap(resolution="low")
+plot(bm,lwd=0.8,add=T,border="gray30")
+dev.off()
+
+pdf("proj7.pdf")
+plot(rast_proj7,col=brewer.pal(9,"YlOrBr"),legend=FALSE, breaks=breakpoints)
+bm<-getMap(resolution="low")
+plot(bm,lwd=0.8,add=T,border="gray30")
+dev.off()
+
+pdf("proj8.pdf")
+plot(rast_proj8,col=brewer.pal(9,"YlOrBr"),legend=FALSE, breaks=breakpoints)
+bm<-getMap(resolution="low")
+plot(bm,lwd=0.8,add=T,border="gray30")
+dev.off()
+
+pdf("proj_legend.pdf")
+plot(rast_proj1,legend.only=TRUE, col=brewer.pal(9,"YlOrBr"),horiz=TRUE,breaks=breakpoints,legend.shrink=1)
+dev.off()
+
