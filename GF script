@@ -1,0 +1,278 @@
+##################################################
+### Modelling adpative genetic variation using GF
+##################################################
+
+library(gradientForest)
+
+Markers<-read.table("markers_east.txt",header=T,row.names=1)
+
+dim(Markers)
+
+Climate<-read.table("climate_east_rda.txt",header=T,row.names=1)
+
+dim(Climate)
+
+da_new<-cbind(Climate,Markers)
+
+pred<-colnames(da_new[,4:10])
+
+pred
+
+resp<-colnames(Markers)
+
+gf<- gradientForest(data = da_new, predictor.vars = pred, response.vars = resp, ntree = 500)
+
+save(gf,file="gfData")
+
+
+### Plot the cumulative importance of each variable
+
+pdf("predictor_cumulative_plot.pdf")
+plot(gf,plot.type="C",imp.vars=names(importance(gf)),show.species=F,common.scale=T,cex.axis=1,cex.lab=1.4,line.ylab=0.9,par.args=list(mgp=c(1.5,0.5,0),mar=c(3,2.5,0.5,0.5),omi=c(0,0.3,0,0)))
+dev.off()
+
+
+###################
+### Plot GDM-biplot
+###################
+
+library(raster)
+r<-getData("worldclim",var="bio",res=2.5)
+r1_coords<- read.table("/data/not_backup/mengmeng/need_to_sort/adapt_prediction/climate_dataset/GDM/work_folder/model2/transform_2/r1_coord",header=T)
+coords<-data.frame(r1_coords[,"x"],r1_coords[,"y"])
+names(coords)<-c("x","y")
+r@crs
+CRS arguments: +proj=longlat +datum=WGS84 
+points<-SpatialPoints(coords,proj4string=r@crs)
+values <- extract(r,points)
+df_ori <- cbind.data.frame(coordinates(points),values)
+df_ori_east<-subset(df_ori,x>-92)
+df<-data.frame(df_ori_east$x,df_ori_east$y,df_ori_east$bio2/10,df_ori_east$bio4/10,df_ori_east$bio5/10,df_ori_east$bio8/10,df_ori_east$bio9/10,df_ori_east$bio13,df_ori_east$bio17)
+
+names(df)[1:9]<-c("Long","Lat","BIO2","BIO4","BIO5","BIO8","BIO9","BIO13","BIO17")
+
+library(gradientForest)
+Trns_grid<-cbind(df[,c("Long","Lat")],predict(gf,df[,imp.vars]))
+
+PCs<-prcomp(na.omit(Trns_grid[,imp.vars]))
+
+a1 <- PCs$x[, 1]
+a2 <- PCs$x[, 2]
+a3 <- PCs$x[, 3]
+
+red<- a1 + a2
+green<- -a2
+blue<-  a3 + a2 - a1
+
+scalR <- (red-min(red))/(max(red)-min(red))*255
+scalG <- (green-min(green))/(max(green)-min(green))*255
+scalB <- (blue-min(blue))/(max(blue)-min(blue))*255
+
+rast2_red_df <- cbind ( na.omit(Trns_grid)[,c("Long","Lat")],data.frame(scalR))
+rast2_green_df<- cbind ( na.omit(Trns_grid)[,c("Long","Lat")],data.frame(scalG)) 
+rast2_blue_df<- cbind ( na.omit(Trns_grid)[,c("Long","Lat")],data.frame(scalB))
+
+
+vec<- c("BIO9","BIO4","BIO8","BIO13","BIO5","BIO17","BIO2")
+lv <- length(vec)
+vind <- rownames(PCs$rotation) %in% vec
+
+xrng <- range(PCs$x[, 1], PCs$rotation[, 1]/65) *1.1
+yrng <- range(PCs$x[, 2], PCs$rotation[, 2]/65) *1.1
+
+pdf("GF_spatial_biplot.pdf")
+plot((PCs$x[, 1:2]), xlim = xrng, ylim = yrng,pch = ".", cex = 2, col = rgb(scalR, scalG, scalB, max = 255),asp = 1)
+arrows(rep(0, lv), rep(0, lv), PCs$rotation[vec,1]/70,PCs$rotation[vec, 2]/70,length =0.0625, lwd=1.6)
+arrows(c(-0.008,0),c(0,-0.009),c(0.009,0),c(0,0.006), angle=15,lwd=1.9)
+text(x=c(0.01,0.0006),y=c(0,0.0065),label=c("PC1","PC2"),font=2,cex=1.2)
+text(-0.001,0.0075,label="BIO4",cex=1.2,font=2)
+text(0.004,0.0026,label="BIO17",cex=1.2,font=2)
+text(0.0025,-0.0005,label="BIO2",cex=1.2,font=2)
+text(0.009,-0.005,label="BIO9",cex=1.2,font=2)
+text(0.0035,-0.006,label="BIO13",cex=1.2,font=2)
+text(0.0027,-0.008,label="BIO5",cex=1.2,font=2)
+text(-0.010,-0.0068,label="BIO8",cex=1.2,font=2)
+dev.off()
+
+
+###########################################
+### Transform the GF modelling on range map
+###########################################
+
+rast_red_df<-read.table("rast2_red_df",header=T)
+rast_green_df<-read.table("rast2_green_df",header=T)
+rast_blue_df<-read.table("rast2_blue_df",header=T)
+
+
+rast_red<-rasterFromXYZ(rast_red_df)  #### Transform dataframe to raster
+rast_green<-rasterFromXYZ(rast_green_df)
+rast_blue<-rasterFromXYZ(rast_blue_df)
+
+
+r2_OutRast<-stack (rast_red,rast_green,rast_blue) ##### Stack different colours
+
+crs(r2_OutRast) <- "+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0" ### Assign coordination system to raster
+r2_OutRast
+plotRGB(r2_OutRast) #### Save it as .png 
+
+
+
+#####################################################################
+### Predict the adaptive genetic variation using GF modelling results
+#####################################################################
+
+##### Below df* are the bioclimatic variables that I downloaded from worldclim.com. These data represent eight scenariosfor RCP2.6, RCP4.5, RCP6.0 and RCP8.5 around years 2050 and 2070.
+
+df_current<-read.table("df_current_edit",header=F)
+df_proj1<-read.table("df_proj1_edit",header=F)
+df_proj2<-read.table("df_proj2_edit",header=F)
+df_proj3<-read.table("df_proj3_edit",header=F)
+df_proj4<-read.table("df_proj4_edit",header=F)
+df_proj5<-read.table("df_proj5_edit",header=F)
+df_proj6<-read.table("df_proj6_edit",header=F)
+df_proj7<-read.table("df_proj7_edit",header=F)
+df_proj8<-read.table("df_proj8_edit",header=F)
+
+names(df_current)[1:9]<-c("Long","Lat","BIO2","BIO4","BIO5","BIO8","BIO9","BIO13","BIO17")
+names(df_proj1)[1:9]<-c("Long","Lat","BIO2","BIO4","BIO5","BIO8","BIO9","BIO13","BIO17")
+names(df_proj2)[1:9]<-c("Long","Lat","BIO2","BIO4","BIO5","BIO8","BIO9","BIO13","BIO17")
+names(df_proj3)[1:9]<-c("Long","Lat","BIO2","BIO4","BIO5","BIO8","BIO9","BIO13","BIO17")
+names(df_proj4)[1:9]<-c("Long","Lat","BIO2","BIO4","BIO5","BIO8","BIO9","BIO13","BIO17")
+names(df_proj5)[1:9]<-c("Long","Lat","BIO2","BIO4","BIO5","BIO8","BIO9","BIO13","BIO17")
+names(df_proj6)[1:9]<-c("Long","Lat","BIO2","BIO4","BIO5","BIO8","BIO9","BIO13","BIO17")
+names(df_proj7)[1:9]<-c("Long","Lat","BIO2","BIO4","BIO5","BIO8","BIO9","BIO13","BIO17")
+names(df_proj8)[1:9]<-c("Long","Lat","BIO2","BIO4","BIO5","BIO8","BIO9","BIO13","BIO17")
+
+
+imp.vars<-names(importance(gf))
+
+pred_current<-predict(gf, df_current[,imp.vars])
+pred_proj1<-predict(gf, df_proj1[,imp.vars])
+pred_proj2<-predict(gf, df_proj2[,imp.vars])
+pred_proj3<-predict(gf, df_proj3[,imp.vars])
+pred_proj4<-predict(gf, df_proj4[,imp.vars])
+pred_proj5<-predict(gf, df_proj5[,imp.vars])
+pred_proj6<-predict(gf, df_proj6[,imp.vars])
+pred_proj7<-predict(gf, df_proj7[,imp.vars])
+pred_proj8<-predict(gf, df_proj8[,imp.vars])
+
+geneOffproj1<-sqrt((pred_proj1[,1]-pred_current[,1])^2+(pred_proj1[,2]-pred_current[,2])^2+(pred_proj1[,3]-pred_current[,3])^2+(pred_proj1[,4]-pred_current[,4])^2+(pred_proj1[,5]-pred_current[,5])^2+(pred_proj1[,6]-pred_current[,6])^2+(pred_proj1[,7]-pred_current[,7])^2)
+
+geneOffproj2<-sqrt((pred_proj2[,1]-pred_current[,1])^2+(pred_proj2[,2]-pred_current[,2])^2+(pred_proj2[,3]-pred_current[,3])^2+(pred_proj2[,4]-pred_current[,4])^2+(pred_proj2[,5]-pred_current[,5])^2+(pred_proj2[,6]-pred_current[,6])^2+(pred_proj2[,7]-pred_current[,7])^2)
+
+geneOffproj3<-sqrt((pred_proj3[,1]-pred_current[,1])^2+(pred_proj3[,2]-pred_current[,2])^2+(pred_proj3[,3]-pred_current[,3])^2+(pred_proj3[,4]-pred_current[,4])^2+(pred_proj3[,5]-pred_current[,5])^2+(pred_proj3[,6]-pred_current[,6])^2+(pred_proj3[,7]-pred_current[,7])^2)
+
+geneOffproj4<-sqrt((pred_proj4[,1]-pred_current[,1])^2+(pred_proj4[,2]-pred_current[,2])^2+(pred_proj4[,3]-pred_current[,3])^2+(pred_proj4[,4]-pred_current[,4])^2+(pred_proj4[,5]-pred_current[,5])^2+(pred_proj4[,6]-pred_current[,6])^2+(pred_proj4[,7]-pred_current[,7])^2)
+
+geneOffproj5<-sqrt((pred_proj5[,1]-pred_current[,1])^2+(pred_proj5[,2]-pred_current[,2])^2+(pred_proj5[,3]-pred_current[,3])^2+(pred_proj5[,4]-pred_current[,4])^2+(pred_proj5[,5]-pred_current[,5])^2+(pred_proj5[,6]-pred_current[,6])^2+(pred_proj5[,7]-pred_current[,7])^2)
+
+geneOffproj6<-sqrt((pred_proj6[,1]-pred_current[,1])^2+(pred_proj6[,2]-pred_current[,2])^2+(pred_proj6[,3]-pred_current[,3])^2+(pred_proj6[,4]-pred_current[,4])^2+(pred_proj6[,5]-pred_current[,5])^2+(pred_proj6[,6]-pred_current[,6])^2+(pred_proj6[,7]-pred_current[,7])^2)
+
+geneOffproj7<-sqrt((pred_proj7[,1]-pred_current[,1])^2+(pred_proj7[,2]-pred_current[,2])^2+(pred_proj7[,3]-pred_current[,3])^2+(pred_proj7[,4]-pred_current[,4])^2+(pred_proj7[,5]-pred_current[,5])^2+(pred_proj7[,6]-pred_current[,6])^2+(pred_proj7[,7]-pred_current[,7])^2)
+
+geneOffproj8<-sqrt((pred_proj8[,1]-pred_current[,1])^2+(pred_proj8[,2]-pred_current[,2])^2+(pred_proj8[,3]-pred_current[,3])^2+(pred_proj8[,4]-pred_current[,4])^2+(pred_proj8[,5]-pred_current[,5])^2+(pred_proj8[,6]-pred_current[,6])^2+(pred_proj8[,7]-pred_current[,7])^2)
+
+
+cur_proj1.df<-data.frame(df_current[,"Long"],df_current[,"Lat"],geneOffproj1)
+cur_proj2.df<-data.frame(df_current[,"Long"],df_current[,"Lat"],geneOffproj2)
+cur_proj3.df<-data.frame(df_current[,"Long"],df_current[,"Lat"],geneOffproj3)
+cur_proj4.df<-data.frame(df_current[,"Long"],df_current[,"Lat"],geneOffproj4)
+cur_proj5.df<-data.frame(df_current[,"Long"],df_current[,"Lat"],geneOffproj5)
+cur_proj6.df<-data.frame(df_current[,"Long"],df_current[,"Lat"],geneOffproj6)
+cur_proj7.df<-data.frame(df_current[,"Long"],df_current[,"Lat"],geneOffproj7)
+cur_proj8.df<-data.frame(df_current[,"Long"],df_current[,"Lat"],geneOffproj8)
+
+names(cur_proj1.df)<-c("x","y","cur_proj1")
+names(cur_proj2.df)<-c("x","y","cur_proj2")
+names(cur_proj3.df)<-c("x","y","cur_proj3")
+names(cur_proj4.df)<-c("x","y","cur_proj4")
+names(cur_proj5.df)<-c("x","y","cur_proj5")
+names(cur_proj6.df)<-c("x","y","cur_proj6")
+names(cur_proj7.df)<-c("x","y","cur_proj7")
+names(cur_proj8.df)<-c("x","y","cur_proj8")
+
+
+####################################
+### Plot the prediction on range map
+#####################################
+
+library(raster)
+library(RColorBrewer)
+library(rworldmap)
+
+rast_proj1_df<-read.table("cur_proj1.df",header=T)
+rast_proj2_df<-read.table("cur_proj2.df",header=T)
+rast_proj3_df<-read.table("cur_proj3.df",header=T)
+rast_proj4_df<-read.table("cur_proj4.df",header=T)
+rast_proj5_df<-read.table("cur_proj5.df",header=T)
+rast_proj6_df<-read.table("cur_proj6.df",header=T)
+rast_proj7_df<-read.table("cur_proj7.df",header=T)
+rast_proj8_df<-read.table("cur_proj8.df",header=T)
+
+rast_proj1<-rasterFromXYZ(rast_proj1_df)
+rast_proj2<-rasterFromXYZ(rast_proj2_df)
+rast_proj3<-rasterFromXYZ(rast_proj3_df)
+rast_proj4<-rasterFromXYZ(rast_proj4_df)
+rast_proj5<-rasterFromXYZ(rast_proj5_df)
+rast_proj6<-rasterFromXYZ(rast_proj6_df)
+rast_proj7<-rasterFromXYZ(rast_proj7_df)
+rast_proj8<-rasterFromXYZ(rast_proj8_df)
+
+breakpoints<-c(0.0009,0.0021,0.0033,0.0045,0.0057,0.0069,0.0081,0.0093,0.0105)
+
+pdf("proj1.pdf")
+plot(rast_proj1,col=brewer.pal(9,"YlGnBu"),legend=FALSE,breaks=breakpoints)
+bm<-getMap(resolution="low")
+plot(bm,lwd=0.8,add=T,border="gray30")
+dev.off()
+
+pdf("proj2.pdf")
+plot(rast_proj2,col=brewer.pal(9,"YlGnBu"),legend=FALSE,breaks=breakpoints)
+bm<-getMap(resolution="low")
+plot(bm,lwd=0.8,add=T,border="gray30")
+dev.off()
+
+
+pdf("proj3.pdf")
+plot(rast_proj3,col=brewer.pal(9,"YlGnBu"),legend=FALSE,breaks=breakpoints)
+bm<-getMap(resolution="low")
+plot(bm,lwd=0.8,add=T,border="gray30")
+dev.off()
+
+
+pdf("proj4.pdf")
+plot(rast_proj4,col=brewer.pal(9,"YlGnBu"),legend=FALSE,breaks=breakpoints)
+bm<-getMap(resolution="low")
+plot(bm,lwd=0.8,add=T,border="gray30")
+dev.off()
+
+
+pdf("proj5.pdf")
+plot(rast_proj5,col=brewer.pal(9,"YlGnBu"),legend=FALSE,breaks=breakpoints)
+bm<-getMap(resolution="low")
+plot(bm,lwd=0.8,add=T,border="gray30")
+dev.off()
+ 
+pdf("proj6.pdf")
+plot(rast_proj6,col=brewer.pal(9,"YlGnBu"),legend=FALSE,breaks=breakpoints)
+bm<-getMap(resolution="low")
+plot(bm,lwd=0.8,add=T,border="gray30")
+dev.off()
+
+
+pdf("proj7.pdf")
+plot(rast_proj7,col=brewer.pal(9,"YlGnBu"),legend=FALSE,breaks=breakpoints)
+bm<-getMap(resolution="low")
+plot(bm,lwd=0.8,add=T,border="gray30")
+dev.off()
+ 
+pdf("proj8.pdf")
+plot(rast_proj8,col=brewer.pal(9,"YlGnBu"),legend=FALSE,breaks=breakpoints)
+bm<-getMap(resolution="low")
+plot(bm,lwd=0.8,add=T,border="gray30")
+dev.off()
+
+pdf("proj_legend.pdf")
+plot(rast_proj1,legend.only=TRUE, col=brewer.pal(9,"YlGnBu"),horiz=TRUE,breaks=breakpoints,legend.shrink=1)
+dev.off()
+
