@@ -1,0 +1,228 @@
+##################################################
+### Modelling adpative genetic variation using RDA
+##################################################
+
+$ /data/programs/R-3.5.2/bin/R
+
+library(vegan)
+
+### markers_east.txt includes the genotypes (SNPs) for each individual
+### climate_east_rda.txt includes the values of bioclimatic variables for each individual
+
+GenData<-read.table("./markers_east.txt",header=T,row.names=1)
+ClimData<-read.table("./climate_east_rda.txt",header=T,row.names=1)
+
+LP.rda <- rda (GenData ~ BIO2+BIO4+BIO5+BIO8+BIO9+BIO13+BIO17,data=ClimData,scale=T)
+
+RsquareAdj(LP.rda)
+summary(eigenvals(LP.rda, model = "constrained"))
+signif.full <- anova.cca(LP.rda, parallel=getOption("mc.cores"))
+summary(LP.rda)
+save(LP.rda,file="LP.rda.data")
+
+###################################################
+### To examine the significance of constrained axes 
+###################################################
+
+$ /data/programs/R-3.5.2/bin/R
+
+library(vegan)
+load("./LP.rda.data")
+signif.axis <- anova.cca(LP.rda, by="axis", parallel=getOption("mc.cores"))
+signif.axis
+
+### From the above step, I found the first two axes are signifiant, so I plot a biplot for RDA1 and RDA2, showing the sampled trees and bioclimatic variables 
+
+$ /data/programs/R-3.5.2/bin/R
+
+library(vegan)
+
+load("./LP.rda.data")
+
+ClimData<-read.table("./climate_east_rda.txt",header=T,row.names=1)
+
+cbPalette <- c("#999999", "#E69F00", "#56B4E9", "#00FF00", "#F0E442", "#0072B2", "#FF3333", "#FFCCCC")
+
+pdf("biplot_12.pdf") #### axes 1&2
+plot(LP.rda,type="n",choices=c(1,2))
+points(LP.rda,display="sites",col=cbPalette[ClimData$States],pch=16,cex=0.7) #### Trees
+text(LP.rda,display="bp",cex=1.2,font=2)
+legend("bottomright",c("AL","FL","GA","MS","NC","SC","TN","VA"),pch=16,col=cbPalette,cex=1.3)
+dev.off()
+
+
+####################################################################################
+### Find out candidate SNPs identified by RDA 
+### (Please refer to the tutorial https://popgen.nescent.org/2018-03-27_RDA_GEA.html) 
+####################################################################################
+
+$ /data/programs/R-3.5.2/bin/R
+
+library(vegan)
+
+load("./LP.rda.data")
+
+GenData<-read.table("./markers_east.txt",header=T,row.names=1)
+ClimData<-read.table("./climate_east_rda.txt",header=T,row.names=1)
+
+load.rda<-scores(LP.rda,choices=c(1:2),display="species") 
+
+outliers <- function(x,z){
++   lims <- mean(x) + c(-1, 1) * z * sd(x)         
++   x[x < lims[1] | x > lims[2]]}   
+
+cand1 <- outliers(load.rda[,1],3) 
+cand2 <- outliers(load.rda[,2],3) 
+
+cand1 <- cbind.data.frame(rep(1,times=length(cand1)), names(cand1), unname(cand1))
+cand2 <- cbind.data.frame(rep(2,times=length(cand2)), names(cand2), unname(cand2))
+
+colnames(cand1) <- colnames(cand2) <- c("axis","snp","loading")
+
+cand <- rbind(cand1, cand2)
+cand$snp <- as.character(cand$snp)
+
+foo <- matrix(nrow=(ncand), ncol=7) 
+colnames(foo) <- c("BIO2","BIO4","BIO5","BIO8","BIO9","BIO13","BIO17")
+
+for (i in 1:length(cand$snp)) {
++   nam <- cand[i,2]
++   snp.gen <- GenData[,nam]
++   foo[i,] <- apply(ClimData[,4:10],2,function(x) cor(x,snp.gen))}
+
+
+cand <- cbind.data.frame(cand,foo)  
+
+length(cand$snp[duplicated(cand$snp)]) ##### No check whether there are duplicated SNPs across axis 1 &2
+
+
+for (i in 1:length(cand$snp)) {
++   bar <- cand[i,]
++   cand[i,11] <- names(which.max(abs(bar[4:10]))) 
++   cand[i,12] <- max(abs(bar[4:10])) }         
+
+colnames(cand)[11] <- "predictor"
+colnames(cand)[12] <- "correlation"
+
+table(cand$predictor) ###### Numbers of SNPs mostly correlated with each climate variable
+
+
+####################################################################################
+### Predicting allele frequencies of SNP outliers under future climates using RDA
+####################################################################################
+
+library(vegan)
+
+### markers_east_outlier_interim.txt includes the genotypes of SNP outliers for each individual
+### climate_east_rda.txt includes the values of bioclimatic variables for each individual
+
+GenData<-read.table("./markers_east_outlier_interim.txt",header=T,row.names=1)
+ClimData<-read.table("./climate_east_rda.txt",header=T,row.names=1)
+ 
+LP.outlier.rda <- rda (GenData ~ BIO2+BIO4+BIO5+BIO8+BIO9+BIO13+BIO17,data=ClimData,scale=T) ###### Find out the correlations between outliers and climate variables
+
+LP.outlier.rda
+
+RsquareAdj(LP.outlier.rda)
+
+summary(eigenvals(LP.outlier.rda, model = "constrained"))
+
+signif.full <- anova.cca(LP.outlier.rda, parallel=getOption("mc.cores"))
+signif.full
+
+
+print(files<-list.files(pattern="df_proj*"))
+future_clim<-list()
+pred<-list()
+pred_interim<-list()
+pred_dif<-list()
+cur_proj<-list()
+aggre<-list()
+
+for (k in 1:8){
+
+
+future_clim[[k]]<-read.table(files[k],header=F)
+names(future_clim[[k]])<-c("long","lat","BIO2","BIO4","BIO5","BIO8","BIO9","BIO13","BIO17")
+
+pred[[k]]<-predict(LP.outlier.rda,future_clim[[k]][,3:9],type=c("response"),model=c("CCA")) ###### Using the correlations to predict future allele frequencies 
+
+
+pred_interim[[k]]<-matrix(nrow=nrow(GenData),ncol=ncol(GenData))
+for (i in 1:299){
+	for (j in 1:280){
+		pred_interim[[k]][i,j]<- (pred[[k]][i,j]-GenData[i,j])^2 }}    #### For each site in each individual, find out the squared difference
+
+
+pred_dif[[k]]<-matrix(nrow=nrow(GenData),ncol=1)
+for(i in 1:299){
+	pred_dif[[k]][i,1]<- sqrt(rowSums(pred_interim[[k]]))[i]}    ####### Sum all the squared differences for each individual and calculate square root
+
+
+cur_proj[[k]]<-data.frame(future_clim[[k]][,"long"],future_clim[[k]][,"lat"],pred_dif[[k]])
+names(cur_proj[[k]])<-c("long","lat",paste("pred",k,sep="_"))
+head(cur_proj[[k]])
+
+aggre[[k]]<-aggregate( . ~ long+lat,data=cur_proj[[k]],mean)    ###### Calculate the mean of the allele frequencies for all individuals in one specific location
+
+write.table(aggre[[k]],paste("cur_proj_",k,".df",sep=""))
+write.table(range(aggre[[k]][,paste("pred",k,sep="_")]),paste("cur_proj_",k,".range",sep=""))
+
+}
+
+
+####################################################################################
+### Plot the average frequency changes of SNP outliers on the range maps
+####################################################################################
+
+
+library(rgdal)
+library(raster)
+library(rworldmap)
+
+
+r2<-raster("small_cell.tif")  #### loblolly pine range GIS layer with medium solution
+r2
+dim(r2)
+r2@crs
+r2@extent
+
+
+library(RColorBrewer)
+breakpoints<-c(7.20,7.80,8.40,9.00,9.60,10.20,10.80,11.40,12.00)
+colpalette<-brewer.pal(9,"YlOrRd")
+
+
+print(files<-list.files(pattern="cur_proj*"))
+sample_coord<-list()
+groups<-list()
+col.points<-list()
+
+
+for (i in 1:8){
+   
+sample_coord[[i]]<-read.table(files[i],header=T)
+dim(sample_coord[[i]])
+head(sample_coord[[i]])
+
+groups[[i]]<-findInterval(sample_coord[[i]][,paste("pred_",i,sep="")],breakpoints)
+col.points[[i]]<-colpalette[groups[[i]]]
+
+pdf(paste("cur_proj_",i,"_future_map.pdf",sep=""))
+par(mar=c(5,5,2,4))
+plot(r2,col="grey80",xlim=c(-92,-70),legend=FALSE, xlab="Longitude",ylab="Latitude",cex.lab=1.3,cex.axis=1.3)
+bm<-getMap(resolution="low")
+plot(bm,xlim=c(-92,-70),ylim=c(25,45),lwd=0.8,add=T,border="gray30")
+points(sample_coord[[i]][,"long"],sample_coord[[i]][,"lat"], pch=19, cex=0.6, col=col.points[[i]])
+dev.off()
+
+}
+
+
+pdf("legend_rda_predict.pdf")     ###### plot legend
+plot(1)
+legend("left",legend=c("Low",NA,NA,NA,NA,NA,NA,NA,"High"),pch=19,col=colpalette,cex=1.3)
+dev.off()
+
+
+
